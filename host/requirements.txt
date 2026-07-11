@@ -1,0 +1,6 @@
+pyqt5~=5.15.4
+setuptools~=67.4.0
+numpy~=1.24.2
+serial~=0.0.97
+pyserial~=3.5
+matplotlib~=3.7.0
