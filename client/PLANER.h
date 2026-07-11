@@ -5,8 +5,8 @@
 #include"STEPPER.h"
 #include"WIREMSG.h"
 #include <Arduino.h>
-int FeedRate = 1000;
-
+int FeedRate = 100;
+int Radias = 20;
 
 class PLANER
 {
