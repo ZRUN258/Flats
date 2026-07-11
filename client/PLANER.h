@@ -7,7 +7,7 @@
 #include <Arduino.h>
 int FeedRate = 100;
 int Radias = 20;
-
+int adfa = 0;
 class PLANER
 {
   public:
