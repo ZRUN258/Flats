@@ -4,7 +4,7 @@
 
 ## 启动
 
-Web Serial 只能在安全上下文中运行。不要直接双击 `index.html`，请在 `host/web` 目录启动本地服务：
+Web Serial 只能在安全上下文中运行。不要直接双击 `index.html`，请在 `host` 目录启动本地服务：
 
 ```bash
 python3 -m http.server 8080
