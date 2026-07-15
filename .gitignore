@@ -1,2 +1,4 @@
 .DS_Store
 /host/__pycache__
+/client/.pio
+/client/.vscode

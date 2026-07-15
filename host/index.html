@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#07111f">
+  <title>Flats · 半球面平整度检测</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark"><span></span></div>
+        <div><h1>FLATS</h1><p>半球面平整度检测系统</p></div>
+      </div>
+      <div class="header-actions">
+        <div class="status-pill" id="systemStatus"><i></i><span>系统待机</span></div>
+        <button class="btn ghost" id="exportBtn">导出数据</button>
+        <button class="btn primary" id="reportBtn">生成报告</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero panel">
+        <div class="section-heading">
+          <div><span class="eyebrow">LIVE SURFACE MAP</span><h2>半球检测视图</h2></div>
+          <span class="model-badge" id="modelBadge">球面直径 14.0 mm</span>
+        </div>
+        <div class="visual-wrap">
+          <canvas id="surfaceCanvas" aria-label="半球面检测结果图"></canvas>
+          <div class="scan-orbit" id="scanOrbit"><span></span></div>
+          <div class="canvas-empty" id="canvasEmpty"><b>等待检测数据</b><span>连接设备并开始扫描后，数据将在此实时呈现</span></div>
+          <div class="legend"><span>低</span><i></i><span>高</span></div>
+        </div>
+        <div class="rotation-control">
+          <span>−180°</span><label><b>旋转模型</b><input id="rotationSlider" type="range" min="-180" max="180" value="25"><output id="rotationValue">25°</output></label><span>180°</span>
+        </div>
+        <div class="model-settings">
+          <label><span>曲率半径</span><div><input id="curvatureRadius" type="number" min="0.1" step="0.1" value="8.6"><b>mm</b></div></label>
+          <label><span>有效口径</span><div><input id="apertureDiameter" type="number" min="0.1" step="0.1" value="14"><b>mm</b></div></label>
+          <label><span>球冠高度</span><div><input id="capHeight" type="text" readonly value="3.60"><b>mm</b></div></label>
+          <label><span>最大倾角</span><div><input id="maxTilt" type="text" readonly value="54.4"><b>°</b></div></label>
+        </div>
+        <div class="metric-row">
+          <article><span>当前点</span><strong id="currentPoint">0 / 0</strong><small>扫描进度</small></article>
+          <article><span>测量值</span><strong id="currentValue">—</strong><small id="valueUnit">原始值</small></article>
+          <article><span>极差</span><strong id="rangeValue">—</strong><small>MAX − MIN</small></article>
+          <article><span>均方根</span><strong id="rmsValue">—</strong><small>RMS</small></article>
+        </div>
+      </section>
+
+      <aside class="controls">
+        <section class="panel device-card">
+          <div class="section-heading compact"><div><span class="eyebrow">CONNECTION</span><h2>设备连接</h2></div></div>
+          <div class="device-row">
+            <div class="device-icon">M</div><div class="device-copy"><b>运动控制器</b><span id="motionPortText">未连接</span></div>
+            <button class="btn small" id="motionConnectBtn">连接</button>
+          </div>
+          <div class="device-row">
+            <div class="device-icon sensor">S</div><div class="device-copy"><b>外部传感器</b><span id="sensorPortText">未连接 · 可选</span></div>
+            <button class="btn small" id="sensorConnectBtn">连接</button>
+          </div>
+          <label class="select-label">采集数据来源
+            <select id="sensorMode"><option value="external">外部传感器串口</option><option value="onboard">运动控制器 MEASURE</option><option value="manual">手动录入/模拟</option></select>
+          </label>
+        </section>
+
+        <section class="panel motion-card">
+          <div class="section-heading compact"><div><span class="eyebrow">POSITIONING</span><h2>球坐标定位</h2></div><button class="icon-btn" id="positionQueryBtn" title="查询位置">↻</button></div>
+          <div class="coordinate-grid">
+            <label><span>方位角 <em>AZ</em></span><div><input id="azInput" type="number" step="0.01" value="0"><b>°</b></div></label>
+            <label><span>倾斜角 <em>TILT</em></span><div><input id="tiltInput" type="number" step="0.01" value="0"><b>°</b></div></label>
+            <label><span>检测半径 <em>R</em></span><div><input id="radiusInput" type="number" step="0.001" value="10"><b>mm</b></div></label>
+          </div>
+          <div class="position-readout"><span>实际位置</span><b id="actualPosition">AZ 0.0000° · TILT 0.0000° · R 0.000 mm</b></div>
+          <div class="button-pair"><button class="btn primary" id="moveBtn">移动到目标</button><button class="btn danger" id="stopBtn">平滑停止</button></div>
+          <div class="jog-block">
+            <div><span>单步点动</span><select id="jogStep"><option value="1">1 步</option><option value="10">10 步</option><option value="100">100 步</option></select></div>
+            <div class="jog-grid">
+              <button data-jog="AZ,-1">AZ −</button><button data-jog="AZ,1">AZ +</button>
+              <button data-jog="TILT,-1">TILT −</button><button data-jog="TILT,1">TILT +</button>
+              <button data-jog="R,-1">R −</button><button data-jog="R,1">R +</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel scan-card">
+          <div class="section-heading compact"><div><span class="eyebrow">AUTOMATION</span><h2>扫描任务</h2></div><span class="tag" id="routeTag">0 点</span></div>
+          <div class="scan-settings">
+            <label>倾斜环数<input id="ringCount" type="number" min="2" max="40" value="8"></label>
+            <label>赤道点数<input id="equatorCount" type="number" min="4" max="180" value="32"></label>
+            <label>探头球坐标半径 mm<input id="scanRadius" type="number" min="0" step="0.001" value="10"></label>
+            <label>稳定等待 ms<input id="settleTime" type="number" min="0" max="10000" value="300"></label>
+          </div>
+          <div class="button-pair"><button class="btn secondary" id="generateRouteBtn">生成等面积路线</button><label class="btn secondary file-btn">导入 CSV<input id="routeFile" type="file" accept=".csv,text/csv"></label></div>
+          <div class="progress-track"><i id="progressBar"></i></div>
+          <div class="button-pair"><button class="btn primary" id="startScanBtn">开始扫描</button><button class="btn ghost" id="pauseScanBtn" disabled>暂停</button></div>
+        </section>
+      </aside>
+
+      <section class="data-panel panel">
+        <div class="section-heading">
+          <div><span class="eyebrow">MEASUREMENT DATA</span><h2>检测数据</h2></div>
+          <div class="tabs"><button class="active" data-tab="records">数据记录</button><button data-tab="terminal">通信日志</button></div>
+        </div>
+        <div id="recordsTab" class="tab-body active">
+          <div class="table-wrap"><table><thead><tr><th>#</th><th>时间</th><th>方位角</th><th>倾斜角</th><th>半径</th><th>检测值</th><th>状态</th></tr></thead><tbody id="recordsBody"></tbody></table><div class="table-empty" id="tableEmpty">暂无检测记录</div></div>
+        </div>
+        <div id="terminalTab" class="tab-body"><div class="terminal" id="terminal"></div></div>
+      </section>
+    </main>
+  </div>
+  <div class="toast-stack" id="toastStack"></div>
+  <dialog id="manualDialog"><form method="dialog"><h3>录入检测值</h3><p>输入当前位置的传感器读数。</p><input id="manualValue" type="number" step="any" autofocus><div><button class="btn ghost" value="cancel">取消</button><button class="btn primary" id="manualConfirm" value="default">确认</button></div></form></dialog>
+  <script src="app.js"></script>
+</body>
+</html>
