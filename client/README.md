@@ -1,7 +1,7 @@
 # 半球面检测运动控制器
 
 Arduino Mega 2560 控制三个步进轴：方位角 `AZ`、倾斜角 `TILT` 和半径/探头距离 `R`。
-电机采用原工程的双脉冲接口（每轴 CW、CCW 各一个脉冲引脚）。所有运动均以整数步执行，
+电机采用 STEP/DIR 接口（每轴一个脉冲引脚和一个方向引脚）。所有运动均以整数步执行，
 不存在累计的浮点位置误差。运动规划使用成熟的 `AccelStepper` 库，支持可配置的最大速度和加减速，
 避免电机突然启停。
 
@@ -17,9 +17,9 @@ Arduino Mega 2560 控制三个步进轴：方位角 `AZ`、倾斜角 `TILT` 和�
 
 编辑 `include/machine_config.h`：
 
-- `cwPin` / `ccwPin`：电机驱动器引脚；
+- `stepPin` / `directionPin`：电机驱动器的脉冲/方向引脚；
 - `unitsPerStep`：角度轴单位为 度/步，半径轴单位为 mm/步；
-- `positiveUsesCw`：实际方向相反时改为 `false`；
+- `positiveDirectionHigh`：协议正方向对应的 DIR 电平，方向相反时反转此值；
 - `maxSpeed`：最大速度，单位 步/秒；
 - `acceleration`：加速度，单位 步/秒²；
 - `LIMITS_ENABLED` 和 `MIN_POSITION` / `MAX_POSITION`：机械限位完成后启用。

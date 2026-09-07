@@ -33,6 +33,7 @@ class Mechanism {
   AccelStepper tilt_;
   AccelStepper radius_;
   AccelStepper *steppers_[AXIS_COUNT];
+  // moveActive_ 表示存在需要上报完成的动作；wasIdle_ 用于检测动作完成沿。
   bool moveActive_ = false;
   bool wasIdle_ = true;
 

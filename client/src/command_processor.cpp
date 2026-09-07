@@ -6,6 +6,8 @@
 #include <string.h>
 
 namespace {
+// strtod/strtol 会接受合法前缀（例如 "12abc" 中的 12），因此还需确认尾部只有空白。
+// 严格解析可避免格式错误的坐标被当作有效运动指令执行。
 bool parseFloatStrict(const char *text, float &value) {
   char *end = nullptr;
   value = strtod(text, &end);
@@ -30,10 +32,12 @@ void CommandProcessor::begin() {
 }
 
 void CommandProcessor::service() {
+  // 持续排空串口，使机构运动期间仍能响应 STOP、POS? 等命令。
   while (serial_.available()) {
     const char c = static_cast<char>(serial_.read());
     if (c == '\r') continue;
     if (c == '\n') {
+      // 一旦溢出，整帧丢弃到换行处，避免把超长帧的尾部误识别成下一条命令。
       if (overflowed_) error(F("LINE_TOO_LONG"));
       else { rxBuffer_[rxLength_] = '\0'; execute(rxBuffer_); }
       rxLength_ = 0;
@@ -42,6 +46,7 @@ void CommandProcessor::service() {
       rxBuffer_[rxLength_++] = c;
       if (rxLength_ == 2 && rxBuffer_[0] >= 'a' && rxBuffer_[0] <= 'f' &&
           rxBuffer_[1] >= '1' && rxBuffer_[1] <= '7') {
+        // 旧协议固定为两个字节且没有换行符，只能在收满两字节时立即执行。
         rxBuffer_[2] = '\0';
         execute(rxBuffer_);
         rxLength_ = 0;
@@ -85,6 +90,7 @@ void CommandProcessor::execute(char *line) {
       if (!token || !parseFloatStrict(token, units[i])) { error(F("MOVE_FORMAT")); return; }
     }
     if (strtok_r(nullptr, ",", &save)) { error(F("MOVE_FORMAT")); return; }
+    // 三轴参数全部通过严格校验后才提交，防止半条指令导致部分轴先动作。
     if (mechanism_.moveToUnits(units) == Mechanism::LIMIT_ERROR) error(F("LIMIT"));
     else serial_.println(mechanism_.isIdle() ? F("ACK,AT_TARGET") : F("ACK,MOVE"));
     return;
@@ -124,6 +130,7 @@ void CommandProcessor::execute(char *line) {
 }
 
 void CommandProcessor::legacyJog(char direction, char sizeCode) {
+  // a/b、c/d、e/f 分别是三轴正/负方向；1..7 映射为离散点动步数。
   static const long increments[7] = {1, 2, 5, 10, 20, 50, 100};
   if (direction < 'a' || direction > 'f' || sizeCode < '1' || sizeCode > '7') {
     error(F("LEGACY_CMD")); return;
@@ -136,6 +143,7 @@ void CommandProcessor::legacyJog(char direction, char sizeCode) {
 }
 
 void CommandProcessor::printPosition(const __FlashStringHelper *prefix) {
+  // 同时返回工程单位和整数步数：前者供界面显示，后者用于标定和无损状态核对。
   serial_.print(prefix);
   for (uint8_t i = 0; i < Mechanism::AXIS_COUNT; ++i) {
     if (i) serial_.print(',');

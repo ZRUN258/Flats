@@ -73,13 +73,13 @@ Web Serial。连接时浏览器会要求用户选择串口，网页不能绕过�
 
 | 轴 | 协议名称 | 含义 | 工程单位 | 当前占位精度 |
 |---|---|---|---|---|
-| 0 | `AZ` | 球坐标方位角 | 度（°） | 0.01°/步 |
+| 0 | `AZ` | 球坐标方位角 | 度（°） | 0.5625°/步 |
 | 1 | `TILT` | 从球冠顶点/极轴向外的倾斜角 | 度（°） | 0.01°/步 |
 | 2 | `R` | 探头在球坐标径向的位置/距离 | 毫米（mm） | 0.001 mm/步 |
 
 - 下位机内部位置始终使用有符号整数步数，单位坐标只在通讯边界换算。
 - `目标步数 = round(目标单位值 / unitsPerStep)`。
-- `positiveUsesCw` 只改变实际输出引脚，不改变协议坐标的正方向。
+- `positiveDirectionHigh` 只改变 DIR 电平极性，不改变协议坐标的正方向。
 - 上电后没有绝对位置记忆或自动归零。完成原点开关前，需人工放到已知位置后执行 `ZERO`。
 
 ## 串口通讯协议
@@ -233,9 +233,9 @@ azimuth_deg,tilt_deg,radius_mm
 
 | 配置 | 说明 |
 |---|---|
-| `cwPin` / `ccwPin` | 双脉冲驱动器方向脉冲引脚 |
+| `stepPin` / `directionPin` | STEP/DIR 驱动器的脉冲和方向引脚 |
 | `unitsPerStep` | 每个整步对应的角度或长度 |
-| `positiveUsesCw` | 协议正方向是否使用 CW 引脚 |
+| `positiveDirectionHigh` | 协议正方向是否使用 DIR 高电平 |
 | `maxSpeed` | 最大速度，步/秒 |
 | `acceleration` | 加速度，步/秒² |
 | `STEP_PULSE_US` | 脉冲高电平宽度 |
@@ -246,7 +246,7 @@ azimuth_deg,tilt_deg,radius_mm
 推荐标定顺序：
 
 1. 脱离机械负载，用 `JOG,<axis>,1` 确认单步输出。
-2. 确认正方向；反向时修改对应轴的 `positiveUsesCw`。
+2. 确认正方向；反向时反转对应轴的 `positiveDirectionHigh`。
 3. 测量固定步数产生的实际角度/长度，计算并填写 `unitsPerStep`。
 4. 低速验证全行程，再设置最大速度和加速度。
 5. 建立可靠原点后确定软件限位，最后启用 `LIMITS_ENABLED`。
