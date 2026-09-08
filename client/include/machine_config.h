@@ -23,7 +23,7 @@ constexpr uint16_t DIRECTION_SETUP_US = 5;
 // AZ：方位角；TILT：极点为 0°；R：探头/样品的径向距离。
 // unitsPerStep 决定协议单位到整数步数的映射，更改细分或传动比后必须同步重标定。
 constexpr AxisConfig AXIS_CONFIG[3] = {
-    {"AZ",   10, 9, 0.05625f, false, 1000.0f, 600.0f},
+    {"AZ",   10, 9, 0.05625f, false, 500.0f, 600.0f},
     {"TILT",  8, 7, 0.010f, false, 1000.0f, 600.0f},
     {"R",     6, 5, 0.001f, false, 1000.0f, 600.0f},
 };

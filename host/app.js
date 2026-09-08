@@ -1,11 +1,12 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
+const SENSOR_RESPONSE_TIMEOUT_MS = 3000;
 const state = {
   motion: { port: null, reader: null, writer: null, buffer: "", connected: false },
-  sensor: { port: null, reader: null, buffer: "", connected: false },
+  sensor: { port: null, reader: null, writer: null, buffer: "", connected: false },
   position: { az: 0, tilt: 0, radius: 0 }, route: [], records: [], logs: [],
-  scanIndex: 0, scanning: false, paused: false, awaitingMeasurement: null, rotation: 25
+  scanIndex: 0, scanning: false, paused: false, awaitingMeasurement: null, measurementTimer: null, rotation: 25
 };
 
 const ui = Object.fromEntries(["systemStatus","motionPortText","sensorPortText","sensorMode","azInput","tiltInput","radiusInput","actualPosition","currentPoint","currentValue","rangeValue","rmsValue","routeTag","progressBar","recordsBody","tableEmpty","terminal","surfaceCanvas","canvasEmpty","scanOrbit","startScanBtn","pauseScanBtn","manualDialog","manualValue"].map(id => [id, $(id)]));
@@ -31,11 +32,13 @@ async function connect(kind) {
   try {
     dev.port = await navigator.serial.requestPort();
     await dev.port.open({ baudRate: 115200, bufferSize: 4096 });
+    dev.buffer = "";
     dev.connected = true;
-    if (kind === "motion") dev.writer = dev.port.writable.getWriter();
+    dev.writer = dev.port.writable.getWriter();
     updateConnectionUI(); readLoop(kind);
     log("SYS", `${kind === "motion" ? "运动控制器" : "传感器"}已连接`); toast("串口连接成功");
     if (kind === "motion") setTimeout(() => sendMotion("POS?"), 300);
+    else setTimeout(() => sendSensor("PING").catch(() => {}), 300);
   } catch (err) { log("ERR", err.message, true); toast(`连接失败：${err.message}`, true); }
 }
 async function disconnect(kind) {
@@ -44,7 +47,11 @@ async function disconnect(kind) {
     if (dev.reader) { await dev.reader.cancel(); dev.reader.releaseLock(); dev.reader = null; }
     if (dev.writer) { dev.writer.releaseLock(); dev.writer = null; }
     if (dev.port) await dev.port.close();
-  } catch (_) {} finally { dev.connected = false; dev.port = null; updateConnectionUI(); }
+  } catch (_) {} finally {
+    dev.connected = false; dev.port = null;
+    if (kind === "sensor" && state.awaitingMeasurement) pauseForSensorError("SlaveADC 已断开");
+    else updateConnectionUI();
+  }
 }
 async function readLoop(kind) {
   const dev = state[kind], decoder = new TextDecoder();
@@ -63,11 +70,15 @@ async function sendMotion(command) {
   if (!state.motion.connected || !state.motion.writer) { toast("请先连接运动控制器", true); throw new Error("motion disconnected"); }
   await state.motion.writer.write(new TextEncoder().encode(`${command}\n`)); log("TX", command);
 }
+async function sendSensor(command) {
+  if (!state.sensor.connected || !state.sensor.writer) { toast("请先连接 SlaveADC", true); throw new Error("sensor disconnected"); }
+  await state.sensor.writer.write(new TextEncoder().encode(`${command}\n`)); log("S/TX", command);
+}
 function handleMotionLine(line) {
   log("RX", line, line.startsWith("ERR"));
   if (/^(POS|DONE|STOPPED),/.test(line)) parsePosition(line);
   if (line.startsWith("DONE,")) onMotionDone();
-  if (line.startsWith("DATA,")) acceptMeasurement(Number(line.split(",")[1]));
+  if (line.startsWith("DATA,") && ui.sensorMode.value === "onboard") acceptMeasurement(Number(line.split(",")[1]));
   if (line.startsWith("ERR,")) toast(line, true);
 }
 function parsePosition(line) {
@@ -77,12 +88,14 @@ function parsePosition(line) {
   ui.actualPosition.textContent = `AZ ${values[0].toFixed(4)}° · TILT ${values[1].toFixed(4)}° · R ${values[2].toFixed(3)} mm`;
 }
 function handleSensorLine(line) {
-  log("S/RX", line); const match = line.match(/[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?/);
-  if (match && state.awaitingMeasurement) acceptMeasurement(Number(match[0]));
+  log("S/RX", line, line.startsWith("ERR,"));
+  const match = line.match(/^DATA,([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)$/);
+  if (match && state.awaitingMeasurement && ui.sensorMode.value === "external") acceptMeasurement(Number(match[1]));
+  if (line.startsWith("ERR,") && state.awaitingMeasurement) pauseForSensorError(`SlaveADC 返回错误：${line}`);
 }
 function updateConnectionUI() {
   ui.motionPortText.textContent = state.motion.connected ? "已连接 · 115200 baud" : "未连接";
-  ui.sensorPortText.textContent = state.sensor.connected ? "已连接 · 等待数据" : "未连接 · 可选";
+  ui.sensorPortText.textContent = state.sensor.connected ? "已连接 · SlaveADC 命令模式" : "未连接 · 可选";
   $("motionConnectBtn").textContent = state.motion.connected ? "断开" : "连接";
   $("sensorConnectBtn").textContent = state.sensor.connected ? "断开" : "连接";
   ui.systemStatus.className = `status-pill${state.scanning ? " scanning" : state.motion.connected ? " online" : ""}`;
@@ -110,6 +123,7 @@ async function importRoute(file) {
 async function startScan() {
   if (!state.route.length) generateEqualAreaRoute();
   if (!state.motion.connected) return toast("请先连接运动控制器", true);
+  if (ui.sensorMode.value === "external" && (!state.sensor.connected || !state.sensor.writer)) return toast("请先连接 SlaveADC", true);
   state.scanning = true; state.paused = false; state.scanIndex = 0; state.records = []; renderRecords(); updateScanUI(); await moveNext();
 }
 async function moveNext() {
@@ -121,21 +135,40 @@ async function moveNext() {
 }
 async function onMotionDone() {
   if (!state.scanning || state.paused) return;
+  const measurementIndex = state.scanIndex;
   await delay(Math.max(0, Number($("settleTime").value)));
+  if (!state.scanning || state.paused || state.scanIndex !== measurementIndex) return;
   state.awaitingMeasurement = state.route[state.scanIndex];
   const mode = ui.sensorMode.value;
   if (mode === "onboard") await sendMotion("MEASURE");
   else if (mode === "manual") { ui.manualValue.value = (100 + Math.random() * 5).toFixed(3); ui.manualDialog.showModal(); }
-  else if (!state.sensor.connected) { toast("外部传感器未连接", true); state.paused = true; updateScanUI(); }
-  else log("SYS", "等待外部传感器数据");
+  else if (!state.sensor.connected || !state.sensor.writer) pauseForSensorError("SlaveADC 未连接");
+  else {
+    armMeasurementTimeout();
+    try { await sendSensor("READ"); log("SYS", "已请求 SlaveADC 采样"); }
+    catch (_) { pauseForSensorError("SlaveADC 读取指令发送失败"); }
+  }
+}
+function armMeasurementTimeout() {
+  clearTimeout(state.measurementTimer);
+  state.measurementTimer = setTimeout(() => {
+    if (state.awaitingMeasurement) pauseForSensorError("等待 SlaveADC 数据超时");
+  }, SENSOR_RESPONSE_TIMEOUT_MS);
+}
+function pauseForSensorError(message) {
+  clearTimeout(state.measurementTimer); state.measurementTimer = null;
+  state.awaitingMeasurement = null;
+  state.paused = true; updateScanUI(); toast(message, true);
 }
 function acceptMeasurement(value) {
   if (!Number.isFinite(value) || !state.awaitingMeasurement) return;
+  clearTimeout(state.measurementTimer); state.measurementTimer = null;
   const p = state.awaitingMeasurement; state.awaitingMeasurement = null;
   state.records.push({ index: state.records.length + 1, time: new Date().toISOString(), ...p, value, status: "有效" });
   state.scanIndex++; renderRecords(); updateMetrics(); drawSurface(); updateScanUI(); setTimeout(moveNext, 30);
 }
 function finishScan(error = false) {
+  clearTimeout(state.measurementTimer); state.measurementTimer = null;
   state.scanning = false; state.paused = false; state.awaitingMeasurement = null; updateScanUI();
   toast(error ? "扫描因连接问题停止" : `扫描完成，共 ${state.records.length} 个有效点`, error);
 }
