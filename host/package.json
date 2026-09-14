@@ -1,0 +1,28 @@
+{
+  "name": "flats-host",
+  "productName": "Flats 上位机",
+  "version": "1.0.0",
+  "description": "Flats 半球面平整度检测系统 Electron 上位机",
+  "main": "electron/main.cjs",
+  "author": "Flats",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "node": ">=20 <26"
+  },
+  "config": {
+    "forge": "./forge.config.js"
+  },
+  "scripts": {
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^7.10.2",
+    "@electron-forge/maker-deb": "^7.10.2",
+    "@electron-forge/maker-squirrel": "^7.10.2",
+    "@electron-forge/maker-zip": "^7.10.2",
+    "electron": "^44.3.0"
+  }
+}

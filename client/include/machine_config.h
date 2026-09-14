@@ -24,7 +24,7 @@ constexpr uint16_t DIRECTION_SETUP_US = 5;
 // unitsPerStep 决定协议单位到整数步数的映射，更改细分或传动比后必须同步重标定。
 constexpr AxisConfig AXIS_CONFIG[3] = {
     {"AZ",   10, 9, 0.066176f, true, 800.0f, 200.0f},
-    {"TILT",  8, 7, 0.001125f, false, 5000.0f, 600.0f},
+    {"TILT",  8, 7, 0.001125f, false, 20000.0f, 5000.0f},
     {"R",     6, 5, 0.005f, false, 1000.0f, 600.0f},
 };
 

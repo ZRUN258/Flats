@@ -1,16 +1,39 @@
-# Flats Web 上位机
+# Flats Electron 上位机
 
-这是无需安装依赖的静态网页上位机，使用浏览器 Web Serial API 连接 Arduino Mega 和可选的外部传感器。
+这是基于 Electron 的桌面上位机，使用 Web Serial API 连接 Arduino Mega 和可选的外部传感器。原有页面仍可作为静态网页运行。
 
-## 启动
+## Electron 开发运行
 
-Web Serial 只能在安全上下文中运行。不要直接双击 `index.html`，请在 `host` 目录启动本地服务：
+请使用 Node.js 20、22 或 24。首次使用先安装依赖：
+
+```bash
+npm install
+npm start
+```
+
+点击“连接”时，Electron 会弹出系统串口选择窗口。运动控制器和 SlaveADC 需要分别选择对应的端口。
+需要烧录下位机固件时，请先点击运动控制器的“断开”，并等待“串口已断开，可以进行烧录”提示后再开始上传。
+
+## 生成安装包
+
+```bash
+npm run make
+```
+
+安装包生成在 `out/make`。Windows 生成 Squirrel 安装程序，macOS 生成 ZIP 应用包，Linux 生成 DEB 包。
+安装包需要在目标操作系统上构建；对外正式分发前应配置代码签名证书。
+
+Logo、软件图标和 PPT 徽章位于 `assets/brand/`，包含 SVG 母版、透明 PNG、macOS ICNS 和 Windows ICO。
+
+## 浏览器方式（可选）
+
+静态页面仍然可以在 Chrome 或 Edge 中运行：
 
 ```bash
 python3 -m http.server 8080
 ```
 
-然后使用最新版 Chrome 或 Edge 打开 `http://localhost:8080`。Safari 和 Firefox 当前不支持 Web Serial。
+然后打开 `http://localhost:8080`。Web Serial 需要安全上下文，不能直接双击 `index.html`。
 
 ## 路线 CSV
 
@@ -35,3 +58,6 @@ python3 -m http.server 8080
 - **手动录入/模拟**：适合无硬件时验证完整扫描流程。
 
 扫描数据只保存在当前浏览器内存中。完成后使用“导出数据”保存 CSV，或“生成报告”调用浏览器打印为 PDF。
+
+曲率半径、有效口径、球冠高度、最大倾角和扫描任务参数会保存在本机，并在下次打开应用时自动恢复。
+其中球冠高度和最大倾角由曲率半径、有效口径重新计算，确保几何参数始终一致。检测记录仍只保存在当前会话中。

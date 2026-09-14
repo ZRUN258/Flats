@@ -2,14 +2,65 @@
 
 const $ = (id) => document.getElementById(id);
 const SENSOR_RESPONSE_TIMEOUT_MS = 3000;
+const SETTINGS_KEY = "flats.host.settings.v1";
+const SETTING_FIELDS = {
+  curvatureRadius: { fallback: 8.6, min: 0.1 },
+  apertureDiameter: { fallback: 14, min: 0.1 },
+  ringCount: { fallback: 8, min: 2, max: 40, integer: true },
+  equatorCount: { fallback: 32, min: 4, max: 180, integer: true },
+  scanRadius: { fallback: 10, min: 0 },
+  settleTime: { fallback: 300, min: 0, max: 10000, integer: true }
+};
 const state = {
-  motion: { port: null, reader: null, writer: null, buffer: "", connected: false },
-  sensor: { port: null, reader: null, writer: null, buffer: "", connected: false },
+  motion: { port: null, reader: null, writer: null, readTask: null, closing: null, closeError: "", buffer: "", connected: false },
+  sensor: { port: null, reader: null, writer: null, readTask: null, closing: null, closeError: "", buffer: "", connected: false },
   position: { az: 0, tilt: 0, radius: 0 }, route: [], records: [], logs: [],
   scanIndex: 0, scanning: false, paused: false, awaitingMeasurement: null, measurementTimer: null, rotation: 25
 };
 
 const ui = Object.fromEntries(["systemStatus","motionPortText","sensorPortText","sensorMode","azInput","tiltInput","radiusInput","actualPosition","currentPoint","currentValue","rangeValue","rmsValue","routeTag","progressBar","recordsBody","tableEmpty","terminal","surfaceCanvas","canvasEmpty","scanOrbit","startScanBtn","pauseScanBtn","manualDialog","manualValue"].map(id => [id, $(id)]));
+
+function normalizeSetting(value, rule) {
+  let number = Number(value);
+  if (!Number.isFinite(number)) number = rule.fallback;
+  number = Math.max(rule.min ?? -Infinity, Math.min(rule.max ?? Infinity, number));
+  return rule.integer ? Math.round(number) : number;
+}
+function loadSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "null");
+    if (!saved || saved.version !== 1) return;
+    const values = { ...saved.model, ...saved.scan };
+    Object.entries(SETTING_FIELDS).forEach(([id, rule]) => {
+      if (values[id] !== undefined) $(id).value = normalizeSetting(values[id], rule);
+    });
+  } catch (err) {
+    console.warn("无法读取本地参数配置", err);
+  }
+}
+function saveSettings() {
+  try {
+    const values = Object.fromEntries(Object.entries(SETTING_FIELDS).map(([id, rule]) => [id, normalizeSetting($(id).value, rule)]));
+    const geometry = modelGeometry();
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
+      version: 1,
+      model: {
+        curvatureRadius: values.curvatureRadius,
+        apertureDiameter: values.apertureDiameter,
+        capHeight: Number(geometry.capHeight.toFixed(2)),
+        maxTilt: Number(geometry.maxTilt.toFixed(1))
+      },
+      scan: {
+        ringCount: values.ringCount,
+        equatorCount: values.equatorCount,
+        scanRadius: values.scanRadius,
+        settleTime: values.settleTime
+      }
+    }));
+  } catch (err) {
+    console.warn("无法保存本地参数配置", err);
+  }
+}
 
 function toast(message, error = false) {
   const el = document.createElement("div"); el.className = `toast${error ? " error" : ""}`; el.textContent = message;
@@ -22,49 +73,93 @@ function log(direction, message, error = false) {
   line.textContent = `[${time}] ${direction.padEnd(3)} ${message}`; ui.terminal.append(line); ui.terminal.scrollTop = ui.terminal.scrollHeight;
 }
 function requireSerial() {
-  if (!("serial" in navigator)) { toast("当前浏览器不支持 Web Serial，请使用 Chrome 或 Edge", true); return false; }
+  if (!("serial" in navigator)) { toast("当前运行环境不支持串口访问", true); return false; }
   return true;
 }
 async function connect(kind) {
   if (!requireSerial()) return;
   const dev = state[kind];
-  if (dev.connected) { await disconnect(kind); return; }
+  if (dev.connected || dev.port) { await disconnect(kind); return; }
   try {
     dev.port = await navigator.serial.requestPort();
     await dev.port.open({ baudRate: 115200, bufferSize: 4096 });
-    dev.buffer = "";
+    dev.buffer = ""; dev.closeError = "";
     dev.connected = true;
     dev.writer = dev.port.writable.getWriter();
-    updateConnectionUI(); readLoop(kind);
+    dev.readTask = readLoop(kind);
+    updateConnectionUI();
     log("SYS", `${kind === "motion" ? "运动控制器" : "传感器"}已连接`); toast("串口连接成功");
-    if (kind === "motion") setTimeout(() => sendMotion("POS?"), 300);
+    if (kind === "motion") setTimeout(() => sendMotion("POS?").catch(() => {}), 300);
     else setTimeout(() => sendSensor("PING").catch(() => {}), 300);
-  } catch (err) { log("ERR", err.message, true); toast(`连接失败：${err.message}`, true); }
-}
-async function disconnect(kind) {
-  const dev = state[kind];
-  try {
-    if (dev.reader) { await dev.reader.cancel(); dev.reader.releaseLock(); dev.reader = null; }
-    if (dev.writer) { dev.writer.releaseLock(); dev.writer = null; }
-    if (dev.port) await dev.port.close();
-  } catch (_) {} finally {
-    dev.connected = false; dev.port = null;
-    if (kind === "sensor" && state.awaitingMeasurement) pauseForSensorError("SlaveADC 已断开");
-    else updateConnectionUI();
+  } catch (err) {
+    if (dev.connected || dev.reader || dev.writer) await disconnect(kind, { silent: true });
+    else { dev.port = null; updateConnectionUI(); }
+    log("ERR", err.message, true); toast(`连接失败：${err.message}`, true);
   }
+}
+async function disconnect(kind, { silent = false } = {}) {
+  const dev = state[kind];
+  if (dev.closing) return dev.closing;
+  if (!dev.port) { dev.connected = false; updateConnectionUI(); return; }
+
+  dev.closing = (async () => {
+    const port = dev.port, reader = dev.reader, writer = dev.writer;
+    dev.connected = false; dev.closeError = ""; updateConnectionUI();
+
+    if (kind === "motion" && state.scanning) finishScan(true);
+    else if (kind === "sensor" && state.awaitingMeasurement) pauseForSensorError("SlaveADC 已断开");
+
+    if (reader) {
+      try { await reader.cancel(); }
+      catch (err) { log("ERR", `取消串口读取失败：${err.message}`, true); }
+    }
+    if (dev.readTask) {
+      try { await dev.readTask; }
+      catch (_) {}
+      finally { dev.readTask = null; }
+    }
+
+    if (writer) {
+      try { await writer.close(); }
+      catch (err) { log("ERR", `关闭串口写入失败：${err.message}`, true); }
+      finally {
+        try { writer.releaseLock(); } catch (_) {}
+        if (dev.writer === writer) dev.writer = null;
+      }
+    }
+
+    try {
+      await port.close();
+      dev.port = null;
+      if (!silent) { log("SYS", `${kind === "motion" ? "运动控制器" : "传感器"}已断开`); toast("串口已断开，可以进行烧录"); }
+    } catch (err) {
+      dev.closeError = err.message || String(err);
+      log("ERR", `串口关闭失败：${dev.closeError}`, true);
+      if (!silent) toast("串口关闭失败，请再次点击断开或退出应用", true);
+    }
+  })().finally(() => {
+    dev.closing = null;
+    updateConnectionUI();
+  });
+
+  return dev.closing;
 }
 async function readLoop(kind) {
   const dev = state[kind], decoder = new TextDecoder();
+  let reader = null;
   try {
-    dev.reader = dev.port.readable.getReader();
+    reader = dev.port.readable.getReader(); dev.reader = reader;
     while (dev.connected) {
-      const { value, done } = await dev.reader.read(); if (done) break;
+      const { value, done } = await reader.read(); if (done) break;
       dev.buffer += decoder.decode(value, { stream: true });
       const lines = dev.buffer.split(/\r?\n/); dev.buffer = lines.pop();
       lines.filter(Boolean).forEach(line => kind === "motion" ? handleMotionLine(line.trim()) : handleSensorLine(line.trim()));
     }
   } catch (err) { if (dev.connected) { log("ERR", err.message, true); toast("串口读取中断", true); } }
-  finally { if (dev.reader) { try { dev.reader.releaseLock(); } catch (_) {} dev.reader = null; } }
+  finally {
+    if (reader) { try { reader.releaseLock(); } catch (_) {} }
+    if (dev.reader === reader) dev.reader = null;
+  }
 }
 async function sendMotion(command) {
   if (!state.motion.connected || !state.motion.writer) { toast("请先连接运动控制器", true); throw new Error("motion disconnected"); }
@@ -94,10 +189,12 @@ function handleSensorLine(line) {
   if (line.startsWith("ERR,") && state.awaitingMeasurement) pauseForSensorError(`SlaveADC 返回错误：${line}`);
 }
 function updateConnectionUI() {
-  ui.motionPortText.textContent = state.motion.connected ? "已连接 · 115200 baud" : "未连接";
-  ui.sensorPortText.textContent = state.sensor.connected ? "已连接 · SlaveADC 命令模式" : "未连接 · 可选";
-  $("motionConnectBtn").textContent = state.motion.connected ? "断开" : "连接";
-  $("sensorConnectBtn").textContent = state.sensor.connected ? "断开" : "连接";
+  ui.motionPortText.textContent = state.motion.closing ? "正在释放串口…" : state.motion.closeError ? "关闭失败 · 请重试" : state.motion.connected ? "已连接 · 115200 baud" : "未连接";
+  ui.sensorPortText.textContent = state.sensor.closing ? "正在释放串口…" : state.sensor.closeError ? "关闭失败 · 请重试" : state.sensor.connected ? "已连接 · SlaveADC 命令模式" : "未连接 · 可选";
+  $("motionConnectBtn").textContent = state.motion.closing ? "断开中" : state.motion.connected || state.motion.port ? "断开" : "连接";
+  $("sensorConnectBtn").textContent = state.sensor.closing ? "断开中" : state.sensor.connected || state.sensor.port ? "断开" : "连接";
+  $("motionConnectBtn").disabled = Boolean(state.motion.closing);
+  $("sensorConnectBtn").disabled = Boolean(state.sensor.closing);
   ui.systemStatus.className = `status-pill${state.scanning ? " scanning" : state.motion.connected ? " online" : ""}`;
   ui.systemStatus.querySelector("span").textContent = state.scanning ? "正在扫描" : state.motion.connected ? "设备就绪" : "系统待机";
 }
@@ -243,6 +340,22 @@ $("exportBtn").onclick=exportData; $("reportBtn").onclick=()=>state.records.leng
 $("manualConfirm").onclick=()=>{const v=Number(ui.manualValue.value);setTimeout(()=>Number.isFinite(v)?acceptMeasurement(v):toast("请输入有效数值",true),0)};
 $("rotationSlider").oninput=e=>{state.rotation=Number(e.target.value);$("rotationValue").textContent=`${state.rotation}°`;drawSurface()};
 ["curvatureRadius","apertureDiameter"].forEach(id=>$(id).addEventListener("input",updateModel));
+Object.keys(SETTING_FIELDS).forEach(id=>$(id).addEventListener("change",saveSettings));
+const pageButtons=[...document.querySelectorAll("[data-page-target]")];
+function showPage(button){
+  pageButtons.forEach(x=>{const active=x===button;x.classList.toggle("active",active);x.setAttribute("aria-selected",String(active))});
+  document.querySelectorAll(".page-view").forEach(x=>x.classList.toggle("active",x.id===button.dataset.pageTarget));
+  if(button.dataset.pageTarget==="overviewPage")requestAnimationFrame(drawSurface);
+}
+pageButtons.forEach((button,index)=>{
+  button.onclick=()=>showPage(button);
+  button.onkeydown=event=>{
+    if(!["ArrowLeft","ArrowRight"].includes(event.key))return;
+    event.preventDefault();
+    const offset=event.key==="ArrowRight"?1:-1,next=pageButtons[(index+offset+pageButtons.length)%pageButtons.length];
+    next.focus();showPage(next);
+  };
+});
 document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{document.querySelectorAll("[data-tab]").forEach(x=>x.classList.toggle("active",x===b));document.querySelectorAll(".tab-body").forEach(x=>x.classList.remove("active"));$(`${b.dataset.tab}Tab`).classList.add("active")});
-window.addEventListener("resize",drawSurface); navigator.serial?.addEventListener("disconnect",()=>{updateConnectionUI();toast("串口设备已断开",true)});
-renderRecords();updateScanUI();updateModel();
+window.addEventListener("resize",drawSurface); window.addEventListener("beforeunload",saveSettings); navigator.serial?.addEventListener("disconnect",()=>{updateConnectionUI();toast("串口设备已断开",true)});
+loadSettings();renderRecords();updateScanUI();updateModel();

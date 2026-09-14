@@ -1,6 +1,6 @@
 # Flats 半球面平整度检测系统
 
-Flats 用于检测半球或球冠类样品（例如隐形眼镜）的表面平整度。系统由 Web 上位机和 Arduino Mega 2560
+Flats 用于检测半球或球冠类样品（例如隐形眼镜）的表面平整度。系统由 Electron 上位机和 Arduino Mega 2560
 下位机组成：上位机生成检测路线、调度扫描、采集并可视化数据；下位机控制方位角、倾斜角和探头半径三个步进轴。
 
 > 当前硬件仍在设计阶段，引脚、运动方向、单步对应角度/长度和机械限位均为占位配置。接入实机前必须完成标定。
@@ -8,7 +8,7 @@ Flats 用于检测半球或球冠类样品（例如隐形眼镜）的表面平�
 ## 系统架构
 
 ```text
-┌────────────────────── Web 上位机（Chrome / Edge）──────────────────────┐
+┌────────────────────── Electron 上位机（兼容浏览器运行）────────────────┐
 │ 路线生成 · 扫描状态机 · 三维球冠视图 · 数据记录 · CSV/PDF 导出          │
 └──────────────────┬────────────────────────┬───────────────────────────┘
                    │ Web Serial 115200       │ Web Serial 115200（可选）
@@ -38,7 +38,10 @@ Flats/
 │   │   ├── command_processor.cpp   # 通讯帧接收、解析与响应
 │   │   └── sensor.cpp              # 传感器占位实现
 │   └── platformio.ini
-└── host/                           # 静态 Web 上位机
+└── host/                           # Electron 上位机
+    ├── electron/main.cjs           # 桌面窗口、串口授权与设备选择
+    ├── package.json                # 运行及打包脚本
+    ├── forge.config.js             # Electron Forge 打包配置
     ├── index.html
     ├── styles.css
     ├── app.js
@@ -57,17 +60,21 @@ pio run -t upload
 
 LazyVim/clangd 用户在依赖或开发板配置变化后运行 `pio run -t compiledb`。
 
-### 上位机
-
-Web Serial 需要安全上下文，不能直接双击 HTML：
+### Electron 上位机
 
 ```bash
 cd host
-python3 -m http.server 8080
+npm install
+npm start
 ```
 
-使用最新版 Chrome 或 Edge 打开 [http://localhost:8080](http://localhost:8080)。Safari 和 Firefox 当前不支持
-Web Serial。连接时浏览器会要求用户选择串口，网页不能绕过此授权步骤。
+生成当前操作系统的安装包：
+
+```bash
+npm run make
+```
+
+连接时 Electron 会要求用户选择串口。原有静态网页模式仍然保留，详见 `host/README.md`。
 
 ## 坐标与单位约定
 
